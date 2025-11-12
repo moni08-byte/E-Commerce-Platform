@@ -1,0 +1,328 @@
+import javafx.application.Application;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
+import javafx.stage.Stage;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+
+public class ProductReviewApp extends Application {
+
+    private final ObservableList<Product> products = FXCollections.observableArrayList();
+    private final ObservableList<Review> currentReviews = FXCollections.observableArrayList();
+
+    private ListView<Product> productListView;
+    private TableView<Review> reviewTable;
+    private TextArea reviewTextArea;
+    private ComboBox<Integer> ratingCombo;
+
+    private final DateTimeFormatter tsFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    @Override
+    public void start(Stage primaryStage) {
+        primaryStage.setTitle("E-Commerce Product Review Platform");
+
+        BorderPane root = new BorderPane();
+        root.setPadding(new Insets(10));
+
+        productListView = new ListView<>(products);
+        productListView.setPrefWidth(220);
+        productListView.getSelectionModel().selectedItemProperty().addListener((obs, oldP, newP) -> onProductSelected(newP));
+
+        reviewTable = new TableView<>(currentReviews);
+        TableColumn<Review, String> userCol = new TableColumn<>("User");
+        userCol.setCellValueFactory(new PropertyValueFactory<>("user"));
+        userCol.setPrefWidth(100);
+
+        TableColumn<Review, Integer> ratingCol = new TableColumn<>("Rating");
+        ratingCol.setCellValueFactory(new PropertyValueFactory<>("rating"));
+        ratingCol.setPrefWidth(60);
+
+        TableColumn<Review, String> textCol = new TableColumn<>("Review");
+        textCol.setCellValueFactory(new PropertyValueFactory<>("text"));
+        textCol.setPrefWidth(380);
+
+        TableColumn<Review, String> timeCol = new TableColumn<>("Time");
+        timeCol.setCellValueFactory(new PropertyValueFactory<>("timestamp"));
+        timeCol.setPrefWidth(150);
+
+        reviewTable.getColumns().addAll(userCol, ratingCol, textCol, timeCol);
+        reviewTable.setPrefHeight(300);
+
+        GridPane addPane = new GridPane();
+        addPane.setHgap(10);
+        addPane.setVgap(8);
+        addPane.setPadding(new Insets(8));
+
+        Label userLabel = new Label("Name:");
+        TextField userField = new TextField();
+        userField.setPromptText("Your name");
+
+        Label ratingLabel = new Label("Rating:");
+        ratingCombo = new ComboBox<>();
+        ratingCombo.getItems().addAll(1, 2, 3, 4, 5);
+        ratingCombo.setValue(5);
+
+        Label reviewLabel = new Label("Review:");
+        reviewTextArea = new TextArea();
+        reviewTextArea.setPrefRowCount(4);
+
+        Button addBtn = new Button("Add Review");
+        addBtn.setOnAction(e -> {
+            Product p = productListView.getSelectionModel().getSelectedItem();
+            if (p == null) {
+                showAlert(Alert.AlertType.WARNING, "No product selected", "Please select a product first.");
+                return;
+            }
+            String user = userField.getText().trim();
+            if (user.isEmpty()) user = "Anonymous";
+            int rating = Optional.ofNullable(ratingCombo.getValue()).orElse(5);
+            String text = reviewTextArea.getText().trim();
+            if (text.isEmpty()) {
+                showAlert(Alert.AlertType.WARNING, "Empty review", "Please write a short review before adding.");
+                return;
+            }
+            Review r = new Review(user, rating, text, LocalDateTime.now().format(tsFmt));
+            p.getReviews().add(r);
+            if (p.equals(productListView.getSelectionModel().getSelectedItem())) {
+                currentReviews.add(r);
+            }
+            userField.clear();
+            reviewTextArea.clear();
+        });
+
+        Button deleteReviewBtn = new Button("Delete Selected Review");
+        deleteReviewBtn.setOnAction(e -> {
+            Review sel = reviewTable.getSelectionModel().getSelectedItem();
+            if (sel == null) {
+                showAlert(Alert.AlertType.INFORMATION, "No selection", "Select a review to delete.");
+                return;
+            }
+            Product p = productListView.getSelectionModel().getSelectedItem();
+            if (p != null) {
+                p.getReviews().remove(sel);
+                currentReviews.remove(sel);
+            }
+        });
+
+        addPane.add(userLabel, 0, 0);
+        addPane.add(userField, 1, 0);
+        addPane.add(ratingLabel, 2, 0);
+        addPane.add(ratingCombo, 3, 0);
+        addPane.add(reviewLabel, 0, 1);
+        addPane.add(reviewTextArea, 1, 1, 3, 1);
+        addPane.add(addBtn, 1, 2);
+        addPane.add(deleteReviewBtn, 2, 2);
+
+        HBox fileBtns = new HBox(8);
+        Button saveBtn = new Button("Save Reviews to CSV...");
+        Button loadBtn = new Button("Load Reviews from CSV...");
+        Button exportBtn = new Button("Export Product Reviews");
+
+        saveBtn.setOnAction(e -> saveReviewsToCSV(primaryStage));
+        loadBtn.setOnAction(e -> loadReviewsFromCSV(primaryStage));
+        exportBtn.setOnAction(e -> exportSelectedProductReviews(primaryStage));
+
+        fileBtns.getChildren().addAll(saveBtn, loadBtn, exportBtn);
+
+        VBox centerBox = new VBox(10, reviewTable, addPane, fileBtns);
+        centerBox.setPadding(new Insets(6));
+
+        root.setLeft(productListView);
+        root.setCenter(centerBox);
+
+        ToolBar toolbar = new ToolBar();
+        Button newProductBtn = new Button("Add Product");
+        newProductBtn.setOnAction(e -> {
+            TextInputDialog dlg = new TextInputDialog();
+            dlg.setTitle("Add Product");
+            dlg.setHeaderText("Create a new product (format: ID - Name)");
+            dlg.setContentText("Enter ID - Name:");
+            dlg.showAndWait().ifPresent(input -> {
+                String[] parts = input.split("-", 2);
+                if (parts.length < 2) {
+                    showAlert(Alert.AlertType.ERROR, "Invalid format", "Use: ID - Name (e.g. P010 - New Product)");
+                    return;
+                }
+                String id = parts[0].trim();
+                String name = parts[1].trim();
+                products.add(new Product(id, name));
+            });
+        });
+
+        Button aboutBtn = new Button("About");
+        aboutBtn.setOnAction(e -> showAlert(Alert.AlertType.INFORMATION, "About", "E-Commerce Product Review Platform\nJavaFX sample application."));
+
+        toolbar.getItems().addAll(newProductBtn, aboutBtn);
+        root.setTop(toolbar);
+
+        Scene scene = new Scene(root, 900, 540);
+        primaryStage.setScene(scene);
+        primaryStage.show();
+
+        if (!products.isEmpty()) productListView.getSelectionModel().selectFirst();
+    }
+
+    private void onProductSelected(Product p) {
+        currentReviews.clear();
+        if (p != null) currentReviews.addAll(p.getReviews());
+    }
+
+    private void saveReviewsToCSV(Stage owner) {
+        FileChooser fc = new FileChooser();
+        fc.setTitle("Save Reviews CSV");
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV files", "*.csv"));
+        File file = fc.showSaveDialog(owner);
+        if (file == null) return;
+        try (BufferedWriter bw = Files.newBufferedWriter(file.toPath())) {
+            bw.write("productId,productName,user,rating,text,timestamp");
+            bw.newLine();
+            for (Product p : products) {
+                for (Review r : p.getReviews()) {
+                    String safeText = r.getText().replace("\"", "'").replace("\n", " ").replace(",", " ");
+                    bw.write(String.format("%s,%s,%s,%d,%s,%s", escape(p.getId()), escape(p.getName()), escape(r.getUser()), r.getRating(), escape(safeText), escape(r.getTimestamp())));
+                    bw.newLine();
+                }
+            }
+            showAlert(Alert.AlertType.INFORMATION, "Saved", "Reviews saved to " + file.getAbsolutePath());
+        } catch (IOException ex) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Could not save file: " + ex.getMessage());
+        }
+    }
+
+    private void loadReviewsFromCSV(Stage owner) {
+        FileChooser fc = new FileChooser();
+        fc.setTitle("Load Reviews CSV");
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV files", "*.csv"));
+        File file = fc.showOpenDialog(owner);
+        if (file == null) return;
+        try (BufferedReader br = Files.newBufferedReader(file.toPath())) {
+            String header = br.readLine();
+            String line;
+            int count = 0;
+            while ((line = br.readLine()) != null) {
+                String[] cols = line.split(",", 6);
+                if (cols.length < 6) continue;
+                String pid = unescape(cols[0]);
+                String pname = unescape(cols[1]);
+                String user = unescape(cols[2]);
+                int rating = Integer.parseInt(cols[3]);
+                String text = unescape(cols[4]);
+                String ts = unescape(cols[5]);
+                Product p = findOrCreateProduct(pid, pname);
+                Review r = new Review(user, rating, text, ts);
+                p.getReviews().add(r);
+                count++;
+            }
+            onProductSelected(productListView.getSelectionModel().getSelectedItem());
+            showAlert(Alert.AlertType.INFORMATION, "Loaded", "Imported " + count + " reviews from file.");
+        } catch (IOException ex) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Could not load file: " + ex.getMessage());
+        }
+    }
+
+    private void exportSelectedProductReviews(Stage owner) {
+        Product p = productListView.getSelectionModel().getSelectedItem();
+        if (p == null) {
+            showAlert(Alert.AlertType.WARNING, "No product", "Select a product to export reviews for.");
+            return;
+        }
+        FileChooser fc = new FileChooser();
+        fc.setTitle("Export Product Reviews");
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV files", "*.csv"));
+        fc.setInitialFileName(p.getId() + "-reviews.csv");
+        File file = fc.showSaveDialog(owner);
+        if (file == null) return;
+        try (BufferedWriter bw = Files.newBufferedWriter(file.toPath())) {
+            bw.write("user,rating,text,timestamp");
+            bw.newLine();
+            for (Review r : p.getReviews()) {
+                String safeText = r.getText().replace("\"", "'").replace("\n", " ").replace(",", " ");
+                bw.write(String.format("%s,%d,%s,%s", escape(r.getUser()), r.getRating(), escape(safeText), escape(r.getTimestamp())));
+                bw.newLine();
+            }
+            showAlert(Alert.AlertType.INFORMATION, "Exported", "Exported " + p.getReviews().size() + " reviews.");
+        } catch (IOException ex) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Could not export: " + ex.getMessage());
+        }
+    }
+
+    private Product findOrCreateProduct(String id, String name) {
+        for (Product p : products) {
+            if (p.getId().equals(id)) return p;
+        }
+        Product p = new Product(id, name);
+        products.add(p);
+        return p;
+    }
+
+    private String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\n", " ").replace("\r", " ").replace("\"", "'").trim();
+    }
+
+    private String unescape(String s) {
+        return s == null ? "" : s.replace("'", "\"").trim();
+    }
+
+    private void showAlert(Alert.AlertType t, String title, String text) {
+        Alert a = new Alert(t);
+        a.setTitle(title);
+        a.setHeaderText(null);
+        a.setContentText(text);
+        a.showAndWait();
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+
+    public static class Product {
+        private final String id;
+        private final String name;
+        private final List<Review> reviews = new ArrayList<>();
+
+        public Product(String id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public String getId() { return id; }
+        public String getName() { return name; }
+        public List<Review> getReviews() { return reviews; }
+
+        @Override
+        public String toString() { return id + " - " + name; }
+    }
+
+    public static class Review {
+        private final String user;
+        private final int rating;
+        private final String text;
+        private final String timestamp;
+
+        public Review(String user, int rating, String text, String timestamp) {
+            this.user = user;
+            this.rating = rating;
+            this.text = text;
+            this.timestamp = timestamp;
+        }
+
+        public String getUser() { return user; }
+        public int getRating() { return rating; }
+        public String getText() { return text; }
+        public String getTimestamp() { return timestamp; }
+    }
+}
